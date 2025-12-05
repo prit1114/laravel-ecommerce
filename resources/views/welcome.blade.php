@@ -1,0 +1,1 @@
+<h1>Laravel 10 Full Starter</h1>
