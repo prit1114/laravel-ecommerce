@@ -1,0 +1,73 @@
+name: CI/CD - Deploy Laravel to EC2
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v4
+        with:
+          php-version: '8.2'
+          extensions: mbstring, xml, curl, bcmath, zip, intl, gd
+          tools: composer:v2
+
+      - name: Install dependencies
+        run: composer install --no-progress --no-suggest --prefer-dist
+
+      - name: Run tests (if any)
+        run: |
+          if [ -f phpunit.xml ] || [ -f phpunit.xml.dist ]; then
+            ./vendor/bin/phpunit
+          else
+            echo "No tests configured."
+          fi
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v0.1.10
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          port: ${{ secrets.DEPLOY_PORT }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          script: |
+            set -e
+
+            cd ${{ secrets.APP_DIR }}
+
+            # Get latest code
+            git fetch --all
+            git reset --hard origin/main
+
+            # Install PHP dependencies
+            composer install --no-dev --optimize-autoloader --no-interaction
+
+            # Run migrations
+            php artisan migrate --force
+
+            # Clear & warm caches
+            php artisan config:cache
+            php artisan route:cache
+            php artisan view:cache
+
+            # Fix permissions
+            sudo chown -R deploy:www-data /var/www/laravel-ecommerce
+            find storage -type d -exec chmod 775 {} \;
+            find bootstrap/cache -type d -exec chmod 775 {} \;
+
+            # Reload services
+            sudo systemctl reload php8.2-fpm
+            sudo systemctl reload nginx
